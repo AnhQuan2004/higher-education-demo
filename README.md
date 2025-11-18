@@ -5,7 +5,7 @@ This project packages a multi-agent student assistant on top of Google's [Agent 
 ## Repository Layout
 
 ```
-adk_copy/
+higher-education-demo/
 ├── rag/
 │   ├── agent.py                # Root agent configuration and routing instructions
 │   ├── sub_agents.py           # Curriculum / Learning / Assessment / Progress agents
@@ -124,8 +124,3 @@ Because this is an in-memory tracker, restarting the process resets progress. Pe
 | Agent introductions don’t mention the student assistant line | Ensure your `.env` sets the proper model values and restart `adk run rag` so the updated prompt loads. |
 | Progress agent can’t find a chapter | Use exact IDs (`ch1`, `ch2`, …) or the chapter title; check `data/course.json` for valid entries. |
 | RAG query tools missing | Root agent no longer exposes `search_all_corpora` directly; make sure you are triggering the learning/curriculum agents instead of the root trying to call the tools by name. |
-
-## License
-
-See [LICENSE](LICENSE).
-
