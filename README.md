@@ -32,7 +32,7 @@ Routing rules live directly in `rag/agent.py`. The root prompt forces any concep
 
 ## Configuration
 
-All runtime settings come from `adk_copy/.env`. The config loader (`rag/config/__init__.py`) reads both this file and a legacy `rag/config/.env` (if present). Key variables:
+All runtime settings come from `.env`. The config loader (`rag/config/__init__.py`) reads both the root `.env` file and a legacy `rag/config/.env` (if present). Key variables:
 
 ```
 # GCP + Vertex AI
@@ -43,15 +43,19 @@ VERTEXAI_LOCATION=asia-east1
 
 # Agents
 RAG_AGENT_NAME=rag_corpus_manager
-RAG_AGENT_MODEL=gemini-2.5-flash
+RAG_AGENT_MODEL=gemini-2.5-flash              # Sub-agents: quality generation
+RAG_ROUTING_MODEL=gemini-2.0-flash-lite       # Root: fast routing decisions (NEW)
 RAG_AGENT_OUTPUT_KEY=last_response
 
-# RAG defaults
+# RAG defaults (OPTIMIZED)
 RAG_DEFAULT_EMBEDDING_MODEL=text-embedding-004
-RAG_DEFAULT_TOP_K=10
-RAG_DEFAULT_SEARCH_TOP_K=5
+RAG_DEFAULT_TOP_K=3                            # Was 10 (60% reduction)
+RAG_DEFAULT_SEARCH_TOP_K=3                     # Was 5 (40% reduction)
 RAG_DEFAULT_VECTOR_DISTANCE_THRESHOLD=0.5
 RAG_DEFAULT_PAGE_SIZE=50
+
+# Context optimization (NEW)
+RAG_MAX_HISTORY_TURNS=5                        # Limit conversation history
 
 # GCS defaults
 GCS_DEFAULT_STORAGE_CLASS=STANDARD
@@ -65,7 +69,7 @@ LOG_LEVEL=INFO
 LOG_FORMAT=%(asctime)s - %(name)s - %(levelname)s - %(message)s
 ```
 
-Update `.env` with your project IDs, API keys, and any alternative defaults before launching the agents.
+Update `.env` with your project IDs and credentials. See `.env.example` for reference.
 
 ## Setup
 
@@ -116,11 +120,57 @@ Because this is an in-memory tracker, restarting the process resets progress. Pe
 - **RAG/GCS helpers** in `rag/tools/` are plain `FunctionTool`s built on Vertex AI and `google-cloud-storage`. They rely on the env vars above.
 - **Testing routes**: Use the ADK Dev UI trace tab to confirm that the root agent always calls a sub-agent before the RAG query tools when handling instructional content.
 
+## Performance Optimizations
+
+This system includes six performance optimization phases (Dec 2025):
+
+### Quick Performance Summary
+
+| Optimization | What Changed | Expected Gain |
+| --- | --- | --- |
+| **Config Tuning** | RAG top_k: 10→3, added lightweight routing model | -15% latency, -40% context |
+| **Parallel Search** | ThreadPoolExecutor for multi-corpus queries | -75% latency (4+ corpora) |
+| **Routing Model** | Root uses gemini-2.0-flash-lite instead of gemini-2.5-flash | -70% routing latency, -80% cost |
+| **Observability** | LatencyLogger tracks per-operation metrics | Bottleneck identification |
+| **Context Management** | Conversation history limited to 5 turns | -80% context for long sessions |
+| **Streaming** | SSE mode for progressive response delivery | TTFT <1.2s, better UX |
+
+### Monitoring Performance
+
+Use the latency logger to track operation times:
+
+```python
+from rag.utils import log_latency, get_metrics_summary
+
+# Automatic timing
+with log_latency("search_query", query=user_input):
+    results = search_all_corpora(user_input)
+
+# View metrics
+summary = get_metrics_summary()
+print(f"Average search latency: {summary['search_query']['avg_ms']:.0f}ms")
+```
+
+### Configuration Tuning
+
+Adjust these environment variables to trade latency vs quality:
+
+```bash
+# More aggressive (faster but fewer results)
+RAG_DEFAULT_TOP_K=2
+RAG_MAX_HISTORY_TURNS=3
+
+# More conservative (slower but higher quality)
+RAG_DEFAULT_TOP_K=5
+RAG_MAX_HISTORY_TURNS=10
+```
+
 ## Troubleshooting
 
 | Issue | Fix |
 | --- | --- |
 | `google.api_core.exceptions.PermissionDenied` | Verify the service account has Vertex AI Admin + Storage Admin roles and that `GOOGLE_CLOUD_PROJECT` matches the resources. |
-| Agent introductions don’t mention the student assistant line | Ensure your `.env` sets the proper model values and restart `adk run rag` so the updated prompt loads. |
-| Progress agent can’t find a chapter | Use exact IDs (`ch1`, `ch2`, …) or the chapter title; check `data/course.json` for valid entries. |
-| RAG query tools missing | Root agent no longer exposes `search_all_corpora` directly; make sure you are triggering the learning/curriculum agents instead of the root trying to call the tools by name. |
+| Agent introductions don't mention the student assistant line | Ensure your `.env` sets the proper model values and restart `adk run rag` so the updated prompt loads. |
+| Progress agent can't find a chapter | Use exact IDs (`ch1`, `ch2`, …) or the chapter title; check `data/course.json` for valid entries. |
+| Slow search responses | Check `RAG_DEFAULT_TOP_K` and `RAG_DEFAULT_SEARCH_TOP_K` values. Lower values = faster. Use latency logger to identify bottlenecks. |
+| High memory usage | Verify `RAG_MAX_HISTORY_TURNS` is set (limits conversation history). |

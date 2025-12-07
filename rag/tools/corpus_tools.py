@@ -20,6 +20,7 @@ import vertexai
 from vertexai.preview import rag
 from google.adk.tools import FunctionTool
 from typing import Dict, Optional, Any
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 from rag.config import (
     PROJECT_ID,
     LOCATION,
@@ -27,7 +28,9 @@ from rag.config import (
     RAG_DEFAULT_TOP_K,
     RAG_DEFAULT_SEARCH_TOP_K,
     RAG_DEFAULT_VECTOR_DISTANCE_THRESHOLD,
-    RAG_DEFAULT_PAGE_SIZE
+    RAG_DEFAULT_PAGE_SIZE,
+    MAX_SEARCH_WORKERS,
+    CORPUS_SEARCH_TIMEOUT
 )
 
 # Initialize Vertex AI API
@@ -649,52 +652,72 @@ def search_all_corpora(
                 "message": "No corpora found to search in"
             }
         
-        # Search in each corpus
+        # PARALLEL SEARCH: Search in each corpus concurrently using ThreadPoolExecutor
         all_results = []
         corpus_results_map = {}  # Map of corpus name to its results
         searched_corpora = []
-        
-        for corpus in all_corpora:
+
+        def _search_single_corpus(corpus: Dict) -> tuple:
+            """Worker function for parallel corpus search execution."""
             corpus_id = corpus["id"]
             corpus_name = corpus.get("display_name", corpus_id)
-            
-            # Query this corpus
-            corpus_results = query_rag_corpus(
+            result = query_rag_corpus(
                 corpus_id=corpus_id,
                 query_text=query_text,
                 top_k=top_k_per_corpus,
                 vector_distance_threshold=vector_distance_threshold
             )
-            
-            # Add corpus info to the results
-            if corpus_results["status"] == "success":
-                results = corpus_results.get("results", [])
-                corpus_specific_results = []
-                
-                for result in results:
-                    # Add citation and source information
-                    result["corpus_id"] = corpus_id
-                    result["corpus_name"] = corpus_name
-                    result["citation"] = f"[Source: {corpus_name} ({corpus_id})]"
-                    
-                    # Add source file information if available
-                    if "source_uri" in result and result["source_uri"]:
-                        source_path = result["source_uri"]
-                        file_name = source_path.split("/")[-1] if "/" in source_path else source_path
-                        result["citation"] += f" File: {file_name}"
-                    
-                    corpus_specific_results.append(result)
-                    all_results.append(result)
-                
-                # Save results for this corpus
-                if corpus_specific_results:
-                    corpus_results_map[corpus_name] = {
-                        "corpus_id": corpus_id,
-                        "corpus_name": corpus_name,
-                        "results": corpus_specific_results,
-                        "count": len(corpus_specific_results)
-                    }
-                    searched_corpora.append(corpus_name)
+            return corpus_id, corpus_name, result
+
+        # Use ThreadPoolExecutor with configurable max_workers and timeout
+        max_workers = min(MAX_SEARCH_WORKERS, len(all_corpora))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all corpus search tasks
+            futures = {
+                executor.submit(_search_single_corpus, corpus): corpus
+                for corpus in all_corpora
+            }
+
+            # Process results as they complete with timeout handling
+            for future in as_completed(futures, timeout=CORPUS_SEARCH_TIMEOUT):
+                try:
+                    corpus_id, corpus_name, corpus_results = future.result()
+
+                    # Add corpus info to the results
+                    if corpus_results["status"] == "success":
+                        results = corpus_results.get("results", [])
+                        corpus_specific_results = []
+
+                        for result in results:
+                            # Add citation and source information
+                            result["corpus_id"] = corpus_id
+                            result["corpus_name"] = corpus_name
+                            result["citation"] = f"[Source: {corpus_name} ({corpus_id})]"
+
+                            # Add source file information if available
+                            if "source_uri" in result and result["source_uri"]:
+                                source_path = result["source_uri"]
+                                file_name = source_path.split("/")[-1] if "/" in source_path else source_path
+                                result["citation"] += f" File: {file_name}"
+
+                            corpus_specific_results.append(result)
+                            all_results.append(result)
+
+                        # Save results for this corpus
+                        if corpus_specific_results:
+                            corpus_results_map[corpus_name] = {
+                                "corpus_id": corpus_id,
+                                "corpus_name": corpus_name,
+                                "results": corpus_specific_results,
+                                "count": len(corpus_specific_results)
+                            }
+                            searched_corpora.append(corpus_name)
+                except TimeoutError:
+                    # Individual corpus search timed out - log but continue with other corpora
+                    pass
+                except Exception as e:
+                    # Individual corpus search failed - log but don't fail entire search
+                    pass
         
         # Sort all results by relevance score (if available)
         all_results.sort(

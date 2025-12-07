@@ -1,5 +1,7 @@
 # ADK core imports
 from google.adk.agents import Agent
+from google.adk.agents.run_config import StreamingMode
+from google.adk.runners import RunConfig
 from google.adk.tools.load_memory_tool import load_memory_tool
 
 # Local tool imports
@@ -10,18 +12,32 @@ from rag.sub_agents import (
     curriculum_agent_tool,
     learning_agent_tool,
     progress_agent_tool,
-)
+)  # Now imported from modular sub_agents/ folder
 from rag.config import (
     AGENT_NAME,
     AGENT_MODEL,
+    ROUTING_MODEL,  # Lightweight model for fast routing decisions
     AGENT_OUTPUT_KEY
 )
 
 
+# Streaming configuration for progressive response delivery
+# SSE mode enables token-by-token streaming, reducing perceived latency
+# max_llm_calls limits total LLM invocations to prevent runaway agent loops
+# With sub-agents: root(1) + sub-agent(1-2) + tool calls(1-2) + response(1) = ~6-8 calls typical
+# Set to 10 to allow sub-agent workflows to complete while still preventing infinite loops
+DEFAULT_RUN_CONFIG = RunConfig(
+    streaming_mode=StreamingMode.SSE,
+    max_llm_calls=10,
+)
+
+
 # Create the RAG management agent
+# Using ROUTING_MODEL (gemini-2.0-flash-lite) for fast routing decisions
+# Root agent only classifies/routes requests, doesn't generate content
 agent = Agent(
     name=AGENT_NAME,
-    model=AGENT_MODEL,
+    model=ROUTING_MODEL,
     description="Agent for managing and searching Vertex AI RAG corpora and GCS buckets",
     instruction="""
     You are a decisive student-assistant conductor for a multi-agent RAG system that manages Vertex AI corpora and GCS buckets.
@@ -61,11 +77,13 @@ agent = Agent(
        - Import documents from GCS to a corpus (requires gcs_uri)
        - List, get details, and delete files within a corpus
        
-    3. CORPUS SEARCHING:
-       - SEARCH ALL CORPORA: Use search_all_corpora(query_text="your question") to search across ALL available corpora
-       - SEARCH SPECIFIC CORPUS: Use query_rag_corpus(corpus_id="ID", query_text="your question") for a specific corpus
-       - When the user asks a question or for information, use the search_all_corpora tool by default.
-       - If the user specifies a corpus ID, use the query_rag_corpus tool for that corpus.
+    3. CORPUS SEARCHING (delegate to sub-agents):
+       - When the user asks a question or wants to search for information, DELEGATE to the appropriate sub-agent:
+         • rag_curriculum_agent: for course structure, chapter overview, or navigation questions
+         • rag_learning_agent: for topic explanations, examples, or concept comparisons
+         • rag_assessment_agent: for rubrics, grading, or feedback requests
+       - The sub-agents have access to search_all_corpora and query_rag_corpus tools.
+       - DO NOT call search_all_corpora or query_rag_corpus directly - always route through sub-agents.
        
        - IMPORTANT - CITATION FORMAT:
          - When presenting search results, ALWAYS include the citation information
@@ -113,3 +131,7 @@ agent = Agent(
 )
 
 root_agent = agent
+
+# Export streaming config for external runners
+# Usage: Runner(...).run_async(..., run_config=DEFAULT_RUN_CONFIG)
+__all__ = ["root_agent", "agent", "DEFAULT_RUN_CONFIG"]

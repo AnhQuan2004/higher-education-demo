@@ -9,6 +9,8 @@ from uuid import uuid4
 
 from google.adk.tools import FunctionTool, ToolContext
 
+from rag.config import MAX_HISTORY_TURNS
+
 
 _COURSE_DATA: Optional[Dict[str, Any]] = None
 _CHAPTER_ORDER: List[str] = []
@@ -116,7 +118,41 @@ def _chapter_summary(chapter_id: Optional[str]) -> Optional[Dict[str, Any]]:
     }
 
 
+def _truncate_history(
+    history: List[Dict[str, Any]],
+    max_turns: int = None,
+) -> List[Dict[str, Any]]:
+    """Truncate conversation history to recent turns.
+
+    Preserves:
+    - System messages (always kept)
+    - Most recent max_turns of user/assistant exchanges
+
+    Args:
+        history: Full conversation history
+        max_turns: Max turns to keep (default: MAX_HISTORY_TURNS)
+
+    Returns:
+        Truncated history list
+    """
+    if max_turns is None:
+        max_turns = MAX_HISTORY_TURNS
+
+    if not history or len(history) <= max_turns * 2:
+        return history
+
+    # Separate system messages from conversation
+    system_msgs = [m for m in history if m.get("role") == "system"]
+    conversation = [m for m in history if m.get("role") != "system"]
+
+    # Keep only recent turns (user + assistant = 2 messages per turn)
+    recent = conversation[-(max_turns * 2):]
+
+    return system_msgs + recent
+
+
 def _build_snapshot(student_id: str) -> Dict[str, Any]:
+    """Build progress snapshot with progress percentage and chapter count."""
     _ensure_course_loaded()
     normalized_student = _normalize_student_id(student_id)
     progress = _PROGRESS_STATE.get(normalized_student, {"completed": []})
@@ -128,12 +164,21 @@ def _build_snapshot(student_id: str) -> Dict[str, Any]:
         None,
     )
 
+    total_chapters = len(_CHAPTER_ORDER)
+    progress_pct = (
+        round(len(ordered_completed) / total_chapters * 100, 1)
+        if total_chapters > 0
+        else 0.0
+    )
+
     return {
         "student_id": normalized_student,
         "completed_chapters": [
             _chapter_summary(cid) for cid in ordered_completed if _chapter_summary(cid)
         ],
         "next_chapter": _chapter_summary(next_chapter_id),
+        "total_chapters": total_chapters,
+        "progress_pct": progress_pct,
     }
 
 
@@ -201,10 +246,23 @@ def get_progress_snapshot(
     student_id: Optional[str] = None,
     tool_context: Optional[ToolContext] = None,
 ) -> Dict[str, Any]:
-    """Return completed chapters and the upcoming recommendation for a student."""
+    """Return completed chapters and the upcoming recommendation for a student.
 
+    Response is optimized for context size - includes summary stats.
+    """
     normalized_student = _resolve_student_id(student_id, tool_context)
     snapshot = _build_snapshot(normalized_student)
+
+    # Add compact summary for LLM context efficiency
+    completed = snapshot.get("completed_chapters", [])
+    next_ch = snapshot.get("next_chapter")
+
+    snapshot["summary"] = (
+        f"{len(completed)}/{snapshot['total_chapters']} chapters complete "
+        f"({snapshot['progress_pct']}%). "
+        f"Next: {next_ch['title'] if next_ch else 'Course complete'}"
+    )
+
     snapshot["status"] = "success"
     snapshot["message"] = "Progress snapshot retrieved"
     return snapshot

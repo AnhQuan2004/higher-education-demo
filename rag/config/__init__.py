@@ -64,17 +64,25 @@ GCS_DEFAULT_CONTENT_TYPE = _env("GCS_DEFAULT_CONTENT_TYPE", "application/pdf")
 
 # RAG Corpus Settings
 RAG_DEFAULT_EMBEDDING_MODEL = _env("RAG_DEFAULT_EMBEDDING_MODEL", "text-embedding-004")
-RAG_DEFAULT_TOP_K = _env_int("RAG_DEFAULT_TOP_K", 10)
-RAG_DEFAULT_SEARCH_TOP_K = _env_int("RAG_DEFAULT_SEARCH_TOP_K", 5)
+RAG_DEFAULT_TOP_K = _env_int("RAG_DEFAULT_TOP_K", 3)
+RAG_DEFAULT_SEARCH_TOP_K = _env_int("RAG_DEFAULT_SEARCH_TOP_K", 3)
 RAG_DEFAULT_VECTOR_DISTANCE_THRESHOLD = _env_float(
     "RAG_DEFAULT_VECTOR_DISTANCE_THRESHOLD", 0.5
 )
 RAG_DEFAULT_PAGE_SIZE = _env_int("RAG_DEFAULT_PAGE_SIZE", 50)
 
+# Performance Settings
+CORPUS_SEARCH_TIMEOUT = _env_float("RAG_CORPUS_SEARCH_TIMEOUT", 10.0)  # Search timeout in seconds
+MAX_SEARCH_WORKERS = _env_int("RAG_MAX_SEARCH_WORKERS", 4)  # Max concurrent search workers
+
 # Agent Settings
 AGENT_NAME = _env("RAG_AGENT_NAME", "rag_corpus_manager")
 AGENT_MODEL = _env("RAG_AGENT_MODEL", "gemini-2.5-flash")
+ROUTING_MODEL = _env("RAG_ROUTING_MODEL", "gemini-2.0-flash-lite")  # Lightweight model for fast routing decisions
 AGENT_OUTPUT_KEY = _env("RAG_AGENT_OUTPUT_KEY", "last_response")
+
+# Context Management
+MAX_HISTORY_TURNS = _env_int("RAG_MAX_HISTORY_TURNS", 5)  # Limit conversation history to reduce token usage
 
 # Logging Settings
 LOG_LEVEL = _env("LOG_LEVEL", "INFO")

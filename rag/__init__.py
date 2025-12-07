@@ -1,5 +1,5 @@
 from .agent import agent, root_agent
-from .sub_agents import (
+from .sub_agents import (  # Modular sub-agents from sub_agents/ folder
     assessment_agent,
     assessment_agent_tool,
     curriculum_agent,
